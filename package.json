@@ -25,6 +25,12 @@
     "index.ts",
     "src",
     "config.example.json",
-    "README.md"
-  ]
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "Twinkle661",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Twinkle661/in-context.git"
+  }
 }
