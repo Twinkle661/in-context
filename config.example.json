@@ -1,0 +1,36 @@
+{
+  "log": "auto",
+  "debug": false,
+  "system": {
+    "enabled": true,
+    "section": "in_context",
+    "sources": [
+      { "text": "You are talking to the user through a chat bridge." },
+      { "file": "./persona.md" },
+      {
+        "url": "https://example.com/api/persona",
+        "headers": { "Authorization": "Bearer ${env:EXAMPLE_API_KEY}" },
+        "field": "content"
+      }
+    ]
+  },
+  "tail": {
+    "enabled": true,
+    "refresh": "user_message",
+    "placement": "merge",
+    "wrap": "in-context",
+    "recentCount": 6,
+    "sources": [
+      { "text": "Current time: {{now}}" },
+      {
+        "url": "https://example.com/api/prompt",
+        "method": "POST",
+        "headers": { "Authorization": "Bearer ${env:EXAMPLE_API_KEY}" },
+        "body": { "user_message": "{{user_message}}", "recent": "{{recent}}" },
+        "field": "content",
+        "timeoutMs": 10000,
+        "maxChars": 12000
+      }
+    ]
+  }
+}
