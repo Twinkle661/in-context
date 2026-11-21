@@ -48,14 +48,18 @@ const server = createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
+const makeAgentDir = () => {
 const agentDir = mkdtempSync(join(tmpdir(), "inctx-agent-"));
-const cwd = mkdtempSync(join(tmpdir(), "inctx-cwd-"));
 writeFileSync(join(agentDir, "models.json"), JSON.stringify({
   providers: { mock: { baseUrl: `${base}/v1`, apiKey: "x", api: "openai-completions",
     models: [{ id: "mock", name: "mock", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } },
 }));
 mkdirSync(join(agentDir, "persona"));
 writeFileSync(join(agentDir, "persona", "a.md"), "FILE-PERSONA");
+return agentDir;
+};
+let agentDir = makeAgentDir();
+let cwd = mkdtempSync(join(tmpdir(), "inctx-cwd-"));
 writeFileSync(join(agentDir, "in-context.json"), JSON.stringify({
   log: "stderr",
   system: { sources: [
@@ -92,7 +96,7 @@ assert.match(r1.stderr, /tail source failed: .*HTTP 503/, "failing source warns 
 assert.doesNotMatch(r1.stdout, /in-context/, "nothing on stdout");
 const q1 = llmRequests.at(-1);
 const s1 = sysText(q1);
-assert.match(s1, /<in_context>\nSTATIC-SYSTEM\n\nFILE-PERSONA\n\nPERSONA#1\n<\/in_context>/);
+assert.match(s1, /<in-context>\nSTATIC-SYSTEM\n\nFILE-PERSONA\n\nPERSONA#1\n<\/in-context>/);
 const u1 = userTexts(q1);
 assert.equal(u1.length, 1);
 assert.match(u1[0], /^first message/);
@@ -127,6 +131,31 @@ assert.equal(tailMsg.role, "user");
 assert.match(JSON.stringify(tailMsg.content), /RAG for: TOOLTEST please read/);
 const toolIdx = q4.messages.findIndex((m) => m.role === "tool");
 assert.ok(toolIdx > 0 && toolIdx < q4.messages.length - 1, "tail sits after the tool result");
+
+// Mode "message": stored once before the first user message, then plain history
+agentDir = makeAgentDir();
+cwd = mkdtempSync(join(tmpdir(), "inctx-cwd-"));
+writeFileSync(join(agentDir, "in-context.json"), JSON.stringify({
+  log: "stderr",
+  system: { mode: "message", wrap: "persona", sources: [
+    { text: "STATIC-SYSTEM" },
+    { url: `${base}/persona`, headers: { Authorization: "Bearer ${env:INCTX_KEY}" }, field: "data.content" },
+  ] },
+}));
+const personaBefore = hits.persona;
+await run("hello there");
+const m1 = llmRequests.at(-1);
+assert.doesNotMatch(sysText(m1), /STATIC-SYSTEM/, "not in the system prompt");
+const mu1 = userTexts(m1);
+assert.equal(mu1.length, 2);
+assert.equal(mu1[0], `<persona>\nSTATIC-SYSTEM\n\nPERSONA#${personaBefore + 1}\n</persona>`, "injected before the first user message");
+assert.equal(mu1[1], "hello there");
+await run("--continue", "again");
+const mu2 = userTexts(llmRequests.at(-1));
+assert.equal(hits.persona, personaBefore + 1, "fetched once");
+assert.equal(mu2.length, 3, "not injected a second time");
+assert.match(mu2[0], /^<persona>/);
+assert.deepEqual(mu2.slice(1), ["hello there", "again"]);
 
 console.log(`e2e ok (${llmRequests.length} LLM requests, ${hits.prompt.length} tail fetches)`);
 server.close();

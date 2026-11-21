@@ -43,8 +43,18 @@ export type Source = TextSource | FileSource | HttpSource;
 
 export interface SystemConfig {
 	enabled: boolean;
-	/** Section tag name; pi wraps the section as <section>...</section>. */
-	section: string;
+	/**
+	 * "system": a section of pi's system prompt, re-declared every run (pi keeps it in the
+	 * transcript's system message; compaction never touches it).
+	 * "message": one hidden user-role message stored before the first user message of a
+	 * new session, then left alone (compaction summarises it like any other message).
+	 */
+	mode: "system" | "message";
+	/**
+	 * Wrapper tag. In "system" mode it is also the section name pi wraps the text in, so it
+	 * must match /^[a-z][a-z0-9_-]*$/ and cannot be null. In "message" mode null means no wrapper.
+	 */
+	wrap: string | null;
 	sources: Source[];
 }
 
@@ -82,7 +92,7 @@ const SECTION_NAME = /^[a-z][a-z0-9_-]*$/;
 const TAG_NAME = /^[A-Za-z][A-Za-z0-9_.:-]*$/;
 
 export const DEFAULTS: Config = {
-	system: { enabled: true, section: "in_context", sources: [] },
+	system: { enabled: true, mode: "system", wrap: "in-context", sources: [] },
 	tail: {
 		enabled: true,
 		refresh: "user_message",
@@ -155,6 +165,17 @@ export function loadConfig(opts: LoadOptions): LoadedConfig {
 		}
 	}
 
+	if (config.system.mode === "system") {
+		const w = config.system.wrap;
+		if (w === null || !SECTION_NAME.test(w) || w === "preamble") {
+			warnings.push(
+				`system.wrap ${JSON.stringify(w)} is not a valid section name for mode "system" ` +
+					`(must match ${SECTION_NAME}, not "preamble"); using "${DEFAULTS.system.wrap}"`,
+			);
+			config.system.wrap = DEFAULTS.system.wrap;
+		}
+	}
+
 	return { config, paths, warnings };
 }
 
@@ -197,10 +218,13 @@ function mergeConfig(
 		else {
 			const s = raw.system;
 			if (s.enabled !== undefined) setBool(s.enabled, (v) => (out.system.enabled = v), where("system.enabled"), warnings);
-			if (s.section !== undefined) {
-				if (typeof s.section === "string" && SECTION_NAME.test(s.section) && s.section !== "preamble") {
-					out.system.section = s.section;
-				} else warnings.push(`${where("system.section")} must match ${SECTION_NAME} and not be "preamble"`);
+			if (s.mode !== undefined) {
+				if (s.mode === "system" || s.mode === "message") out.system.mode = s.mode;
+				else warnings.push(`${where("system.mode")} must be system|message`);
+			}
+			if (s.wrap !== undefined) {
+				if (s.wrap === null || (typeof s.wrap === "string" && TAG_NAME.test(s.wrap))) out.system.wrap = s.wrap;
+				else warnings.push(`${where("system.wrap")} must be a tag name or null`);
 			}
 			out.system.sources.push(...parseSources(s.sources, where("system.sources"), dir, warnings));
 		}

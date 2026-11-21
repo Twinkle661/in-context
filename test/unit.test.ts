@@ -29,13 +29,13 @@ test("config lookup order, shadow warning, untrusted project ignored", () => {
 	const agent = mkdtempSync(join(tmpdir(), "a-"));
 	const cwd = mkdtempSync(join(tmpdir(), "c-"));
 	writeFileSync(join(agent, "in-context.json"), JSON.stringify({
-		system: { section: "persona", sources: [{ text: "x" }, { text: "y", url: "z" }, { file: "p.md" }] },
+		system: { wrap: "persona", sources: [{ text: "x" }, { text: "y", url: "z" }, { file: "p.md" }] },
 	}));
 	mkdirSync(join(cwd, ".pi"));
 	writeFileSync(join(cwd, ".pi", "in-context.json"), JSON.stringify({ tail: { sources: [{ text: "t" }] } }));
 
 	const untrusted = loadConfig({ agentDir: agent, cwd, configDirName: ".pi", projectTrusted: false, env: {} });
-	assert.equal(untrusted.config.system.section, "persona");
+	assert.equal(untrusted.config.system.wrap, "persona");
 	assert.equal(untrusted.config.system.sources.length, 2, "invalid source dropped");
 	assert.equal((untrusted.config.system.sources[1] as { file: string }).file, join(agent, "p.md"));
 	assert.equal(untrusted.config.tail.sources.length, 0);
@@ -47,6 +47,20 @@ test("config lookup order, shadow warning, untrusted project ignored", () => {
 
 	const viaEnv = loadConfig({ agentDir: agent, cwd, configDirName: ".pi", projectTrusted: false, env: { PI_IN_CONTEXT_CONFIG: "/nope.json" } });
 	assert.ok(viaEnv.warnings.some((w) => w.includes("missing file")));
+});
+
+test("system mode needs a section-safe wrap; message mode allows null", () => {
+	const agent = mkdtempSync(join(tmpdir(), "a-"));
+	const cwd = mkdtempSync(join(tmpdir(), "c-"));
+	const opts = { agentDir: agent, cwd, configDirName: ".pi", projectTrusted: false, env: {} };
+	writeFileSync(join(agent, "in-context.json"), JSON.stringify({ system: { wrap: "Persona" } }));
+	const bad = loadConfig(opts);
+	assert.equal(bad.config.system.wrap, "in-context");
+	assert.ok(bad.warnings.some((w) => w.includes("not a valid section name")));
+	writeFileSync(join(agent, "in-context.json"), JSON.stringify({ system: { mode: "message", wrap: null } }));
+	const ok = loadConfig(opts);
+	assert.equal(ok.config.system.wrap, null);
+	assert.equal(ok.warnings.length, 0);
 });
 
 test("inject merges into trailing user message, otherwise appends", () => {

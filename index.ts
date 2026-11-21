@@ -28,6 +28,11 @@ export default function inContext(pi: ExtensionAPI) {
 		tail.onSessionStart(config);
 	});
 
+	pi.on("input", async (event, ctx) => {
+		await system.onInput(event, ctx);
+		return { action: "continue" as const };
+	});
+
 	pi.on("before_agent_start", (event, ctx) => system.onBeforeAgentStart(event, ctx));
 
 	pi.on("turn_start", (event) => tail.onTurnStart(event.turnIndex));
@@ -50,6 +55,10 @@ export default function inContext(pi: ExtensionAPI) {
 			if (sub === "status") {
 				say(formatStatus(configPaths, system.status(), tail.status()));
 			} else if (sub === "refresh") {
+				if (system.status().mode === "message") {
+					say('refresh only applies to system.mode "system"; in "message" mode the text is already part of history');
+					return;
+				}
 				const s = await system.refresh(ctx);
 				say(
 					s.lastErrors.length > 0
@@ -73,10 +82,18 @@ function formatStatus(
 	t: ReturnType<TailInjector["status"]>,
 ): string {
 	const lines = [`config: ${paths.length > 0 ? paths.join(" + ") : "(none, defaults)"}`];
-	lines.push(
-		`system: ${s.enabled ? "on" : "off"} · section <${s.section}> · ${s.lastChars} chars last run` +
-			(s.snapshot ? ` · snapshot ${s.snapshot.createdAt} (${Object.keys(s.snapshot.items).length} remote)` : ""),
-	);
+	const wrap = s.wrap ? `<${s.wrap}>` : "no wrap";
+	if (s.mode === "system") {
+		lines.push(
+			`system: ${s.enabled ? "on" : "off"} · mode system · ${wrap} · ${s.lastChars} chars last run` +
+				(s.snapshot ? ` · snapshot ${s.snapshot.createdAt} (${Object.keys(s.snapshot.items).length} remote)` : ""),
+		);
+	} else {
+		lines.push(
+			`system: ${s.enabled ? "on" : "off"} · mode message · ${wrap} · ` +
+				(s.injected ? `in history${s.lastChars ? ` (${s.lastChars} chars)` : ""}` : "waiting for the first message"),
+		);
+	}
 	if (s.pendingKeys.length > 0) lines.push(`  not fetched yet: ${s.pendingKeys.join(", ")}`);
 	if (s.lastErrors.length > 0) lines.push(`  last errors: ${s.lastErrors.join("; ")}`);
 	lines.push(`tail: ${t.enabled ? "on" : "off"} · ${t.sources} sources`);

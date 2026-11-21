@@ -1,6 +1,6 @@
 {
   "name": "in-context",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "pi extension: session-level system prompt sections and per-request ephemeral tail context, from static text, files or REST endpoints.",
   "type": "module",
   "license": "MIT",

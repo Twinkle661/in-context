@@ -3,7 +3,8 @@
   "debug": false,
   "system": {
     "enabled": true,
-    "section": "in_context",
+    "mode": "system",
+    "wrap": "in-context",
     "sources": [
       { "text": "You are talking to the user through a chat bridge." },
       { "file": "./persona.md" },

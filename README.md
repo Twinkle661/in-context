@@ -2,13 +2,13 @@
 
 A [pi](https://github.com/earendil-works/pi) extension that puts extra text into the model's context in two places:
 
-- **system**: a section appended to the end of pi's system prompt. Remote content is fetched **once per session** and kept with the session.
+- **system**: injected once per session. Pick one of two modes. By default it is a section appended to the end of pi's system prompt. It can instead be a hidden message stored before the first user message of a new session.
 - **tail**: a block appended after the latest message on **every model request**. It is never saved to history, which makes it a good fit for external RAG or memory lookups.
 
 Each place takes a list of sources. A source can be static text, a file, or a REST endpoint.
 
 ```text
-system prompt … <cwd>…</cwd> <in_context>  system sources  </in_context>
+system prompt … <cwd>…</cwd> <in-context>  system sources  </in-context>   (mode "system")
 history …
 latest user message
 <in-context>  tail sources  </in-context>      ← this request only
@@ -64,7 +64,7 @@ Sources resolve concurrently and are joined in list order with blank lines betwe
 
 | Variable | system | tail |
 |---|---|---|
-| `session_id`, `cwd`, `model`, `now` | ✓ (frozen at session creation) | ✓ |
+| `session_id`, `cwd`, `model`, `now` | ✓ (frozen when the session's snapshot is created) | ✓ |
 | `user_message` | | ✓ Text of the latest user message |
 | `recent` | | ✓ Last `recentCount` messages as `[{role, text}]` |
 | `turn_index` | | ✓ |
@@ -74,12 +74,16 @@ Sources resolve concurrently and are joined in list order with blank lines betwe
 | Field | Default | |
 |---|---|---|
 | `enabled` | `true` | |
-| `section` | `in_context` | Section tag. Must match `^[a-z][a-z0-9_-]*$` |
+| `mode` | `system` | `system` or `message`, see below |
+| `wrap` | `in-context` | Wrapper tag. In `system` mode it is also pi's section name, so it must match `^[a-z][a-z0-9_-]*$` and cannot be `null`. In `message` mode, `null` means no wrapper |
 | `sources` | `[]` | |
 
-Remote (`url`) sources are fetched when the session starts and saved in a session entry. That entry is never sent to the model.
+### mode `system`
 
-- `resume`, `fork`, and `reload` reuse the saved result.
+The text is a section at the end of pi's system prompt.
+
+Remote (`url`) sources are fetched when the session starts and saved in a session entry. That entry is never sent to the model.
+- `resume`, `fork`, and `reload` reuse the saved result. `/in-context refresh` fetches again.
 - `text` and `file` sources are read fresh on every run, so config edits take effect after `/reload`.
 - A source that failed is retried on the next message, at most once a minute.
 
@@ -88,7 +92,18 @@ Why the section is declared on every run: pi's system prompt is declarative. pi 
 - A changed section sends a small patch.
 - A section that is no longer declared is removed.
 
-The transcript's system message is what persists. Declaring the section each run keeps it there.
+The transcript's system message is what persists. Declaring the section each run keeps it there. Compaction never touches it.
+
+### mode `message`
+
+On a **new** session, the text is stored as a hidden custom message just before the first user message. The model sees it as a user message. From then on it is ordinary history:
+- It is never injected again, and never refreshed.
+- Compaction summarises it like any other message.
+- Sessions that already have a conversation are left untouched.
+
+The message is stored from the `input` hook, while pi is still idle, which places it ahead of the prompt. A run that skips that hook, such as one started by another extension's custom message, gets the message right after its starting message instead.
+
+Failed `url` sources get one more try at the first message. If they still fail, they are left out.
 
 ## tail
 
@@ -114,7 +129,7 @@ Warnings never go to stdout, because stdout is the protocol stream in RPC mode. 
 ## Commands
 
 - `/in-context status`: config files in use, system snapshot, last tail injection (size, time, errors)
-- `/in-context refresh`: re-fetch system url sources. Takes effect from the next message. Values that fail to refresh keep their previous result
+- `/in-context refresh`: mode `system` only. Re-fetch system url sources. Takes effect from the next message. Values that fail to refresh keep their previous result
 - `/in-context preview <message>`: show what tail would inject for `<message>`
 
 With `"debug": true`, each tail fetch is recorded as an `in-context/tail-trace` session entry. Trace entries are never sent to the model.
