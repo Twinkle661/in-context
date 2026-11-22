@@ -1,8 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Config, sourceKey } from "./config.ts";
+import { type Config, RECENT_DEFAULTS, type RecentOptions, type Source, sourceKey } from "./config.ts";
 import { warn } from "./log.ts";
-import { joinParts, resolveAll } from "./source.ts";
+import { joinParts, resolveSource } from "./source.ts";
 import type { Vars } from "./template.ts";
 
 export const TRACE_TYPE = "in-context/tail-trace";
@@ -78,9 +78,9 @@ export class TailInjector {
 
 	private async build(userMessage: string, messages: AgentMessage[], ctx: ExtensionContext, record: boolean): Promise<string> {
 		const config = this.config!;
-		const vars: Vars = {
+		const current = findLastUser(messages)?.message;
+		const base: Vars = {
 			user_message: userMessage,
-			recent: recentMessages(messages, config.tail.recentCount),
 			session_id: ctx.sessionManager.getSessionId(),
 			cwd: ctx.cwd,
 			model: ctx.model?.id ?? "",
@@ -88,7 +88,10 @@ export class TailInjector {
 			turn_index: this.turnIndex,
 		};
 		const start = Date.now();
-		const results = await resolveAll(config.tail.sources, { vars, signal: ctx.signal });
+		const varsFor = (src: Source): Vars => ({ ...base, recent: recentMessages(messages, src.recent, current) });
+		const results = await Promise.all(
+			config.tail.sources.map((src) => resolveSource(src, { vars: varsFor(src), signal: ctx.signal })),
+		);
 		const errors = results.flatMap((r, i) => (r.ok ? [] : [`${sourceKey(config.tail.sources[i], i)}: ${r.error}`]));
 		if (errors.length > 0) warn(ctx, config.log, `tail source failed: ${errors.join("; ")}`);
 
@@ -136,12 +139,20 @@ function textOf(content: unknown): string {
 		.join("\n");
 }
 
-export function recentMessages(messages: AgentMessage[], count: number): RecentItem[] {
+/**
+ * {{recent}} for one source: the last `count` messages whose role is in `roles`, oldest
+ * first, text parts only. Messages without text are skipped and do not use up the count.
+ * `current` is the current user message, left out when includeCurrent is false.
+ */
+export function recentMessages(messages: AgentMessage[], options: RecentOptions | undefined, current?: AgentMessage): RecentItem[] {
+	const { count, roles, includeCurrent } = { ...RECENT_DEFAULTS, ...options };
 	if (count <= 0) return [];
+	const keep = new Set(roles);
 	const out: RecentItem[] = [];
 	for (let i = messages.length - 1; i >= 0 && out.length < count; i--) {
 		const m = messages[i] as { role: string; content?: unknown };
-		if (m.role === "system") continue;
+		if (!keep.has(m.role)) continue;
+		if (!includeCurrent && messages[i] === current) continue;
 		const text = textOf(m.content).trim();
 		if (text) out.push({ role: m.role, text });
 	}

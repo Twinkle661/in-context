@@ -22,6 +22,8 @@ git clone https://github.com/Twinkle661/in-context
 cp in-context/config.example.json in-context/config.json
 ```
 
+`config.example.json` is an empty skeleton. `config.example.jsonc` documents every option with comments. Config files are parsed as JSONC, so you can also copy that file to `config.jsonc` and edit it, comments included.
+
 No `npm install` is needed. The extension has no runtime dependencies.
 
 `pi install git:github.com/Twinkle661/in-context` also works. pi manages that checkout and resets it on update, so put your config in `~/.pi/agent/in-context.json` instead.
@@ -31,12 +33,12 @@ No `npm install` is needed. The extension has no runtime dependencies.
 The first file found is used as the base config:
 
 1. `$PI_IN_CONTEXT_CONFIG`
-2. `~/.pi/agent/in-context.json`
-3. `~/.pi/agent/extensions/in-context/config.json`
+2. `~/.pi/agent/in-context.json` (or `.jsonc`)
+3. `~/.pi/agent/extensions/in-context/config.json` (or `.jsonc`)
 
-After that, `<project>/.pi/in-context.json` is merged on top, but only if the project is trusted. Its `sources` are added after the base ones, and its scalar settings override.
+After that, `<project>/.pi/in-context.json` (or `.jsonc`) is merged on top, but only if the project is trusted. Its `sources` are added after the base ones, and its scalar settings override.
 
-If both 2 and 3 exist, a warning says which one is shadowed. Run `/reload` after editing.
+If both 2 and 3 exist, a warning says which one is shadowed. Where both `.json` and `.jsonc` exist in the same place, `.json` is used. All files may contain comments and trailing commas. Run `/reload` after editing.
 
 ## Sources
 
@@ -49,7 +51,8 @@ Every source has exactly one of `text`, `file`, or `url`. Both `system` and `tai
 | `url` | http | | `{{var}}` placeholders are filled in (URL-encoded); `${env:NAME}` is expanded |
 | `method` | http | `GET` | `GET`, `POST`, or `PUT` |
 | `headers` | http | | `${env:NAME}` is expanded. If a referenced variable is missing, the source is skipped |
-| `body` | http | | A JSON value. A string that is exactly `"{{var}}"` becomes the raw value (arrays survive). Other strings are interpolated |
+| `body` | http | see note | A JSON value. A string that is exactly `"{{var}}"` becomes the raw value (arrays survive). Other strings are interpolated. POST/PUT without a body send `{"user_message": "{{user_message}}", "recent": "{{recent}}"}` |
+| `recent` | all (tail) | see below | What `{{recent}}` holds for this source |
 | `parse` | http | `json` | `json` reads `field`; `text` uses the whole response body |
 | `field` | http | `content` | Dot path into the response, e.g. `data.items.0.text`. Non-string values are JSON-encoded |
 | `timeoutMs` | http | `10000` | |
@@ -66,8 +69,20 @@ Sources resolve concurrently and are joined in list order with blank lines betwe
 |---|---|---|
 | `session_id`, `cwd`, `model`, `now` | ✓ (frozen when the session's snapshot is created) | ✓ |
 | `user_message` | | ✓ Text of the latest user message |
-| `recent` | | ✓ Last `recentCount` messages as `[{role, text}]` |
+| `recent` | | ✓ Recent messages as `[{role, text}]`, oldest first, shaped per source (below) |
 | `turn_index` | | ✓ |
+
+### `recent`
+
+Each tail source sets its own `{{recent}}`:
+
+| Field | Default | |
+|---|---|---|
+| `count` | `6` | How many messages. Messages without text are skipped and don't count |
+| `roles` | `["user", "assistant"]` | pi roles to keep. Others include `toolResult`, `bashExecution`, `custom` |
+| `includeCurrent` | `true` | Include the current user message. Set `false` to avoid duplicating `{{user_message}}` |
+
+Only text parts are included: no images, thinking blocks or tool-call arguments.
 
 ## system
 
@@ -113,7 +128,6 @@ Failed `url` sources get one more try at the first message. If they still fail, 
 | `refresh` | `user_message` | `user_message`: fetch once per user message and reuse it for every request in a tool loop. `request`: fetch before every request |
 | `placement` | `merge` | `merge`: append a text block to the trailing user message, or add a separate user message when the transcript ends with something else (e.g. a tool result). `separate`: always add a separate user message |
 | `wrap` | `in-context` | Outer tag. `null` disables it |
-| `recentCount` | `6` | Size of `{{recent}}` |
 | `sources` | `[]` | |
 
 The block is added in pi's `context_with_system` hook. That hook shapes one provider request and is not persisted, so the block never enters the session file or later requests. Only the cached tail of the prompt is invalidated.

@@ -7,6 +7,18 @@ import { fileURLToPath } from "node:url";
 // Types
 // ---------------------------------------------------------------------------
 
+/** What {{recent}} exposes for this source (tail only). */
+export interface RecentOptions {
+	/** How many messages, newest last. Default 6. */
+	count?: number;
+	/** pi message roles to keep. Default ["user", "assistant"]. */
+	roles?: string[];
+	/** Include the current user message (also available as {{user_message}}). Default true. */
+	includeCurrent?: boolean;
+}
+
+export const RECENT_DEFAULTS: Required<RecentOptions> = { count: 6, roles: ["user", "assistant"], includeCurrent: true };
+
 interface SourceBase {
 	/** Stable key for the system snapshot. Defaults to the source's position + url. */
 	id?: string;
@@ -15,6 +27,8 @@ interface SourceBase {
 	wrap?: string;
 	/** Truncate this item to maxChars. */
 	maxChars?: number;
+	/** Shape of {{recent}} for this source (tail only). */
+	recent?: RecentOptions;
 }
 
 export interface TextSource extends SourceBase {
@@ -30,7 +44,10 @@ export interface HttpSource extends SourceBase {
 	url: string;
 	method?: "GET" | "POST" | "PUT";
 	headers?: Record<string, string>;
-	/** JSON value; "{{var}}" strings are replaced with the variable's raw value. */
+	/**
+	 * JSON value; "{{var}}" strings are replaced with the variable's raw value.
+	 * POST/PUT without a body send DEFAULT_BODY.
+	 */
 	body?: unknown;
 	/** "json" (default) reads `field`; "text" uses the whole body. */
 	parse?: "json" | "text";
@@ -64,8 +81,6 @@ export interface TailConfig {
 	placement: "merge" | "separate";
 	/** Outer wrapper tag for the whole tail block; null disables it. */
 	wrap: string | null;
-	/** How many recent messages {{recent}} exposes. */
-	recentCount: number;
 	sources: Source[];
 }
 
@@ -98,7 +113,6 @@ export const DEFAULTS: Config = {
 		refresh: "user_message",
 		placement: "merge",
 		wrap: "in-context",
-		recentCount: 6,
 		sources: [],
 	},
 	log: "auto",
@@ -120,9 +134,10 @@ export interface LoadOptions {
 /**
  * Lookup order for the base config (first hit wins):
  *   1. $PI_IN_CONTEXT_CONFIG
- *   2. <agentDir>/in-context.json
- *   3. <extension dir>/config.json
- * Then <cwd>/.pi/in-context.json is merged on top when the project is trusted.
+ *   2. <agentDir>/in-context.json(c)
+ *   3. <extension dir>/config.json(c)
+ * Then <cwd>/.pi/in-context.json(c) is merged on top when the project is trusted.
+ * Every file is parsed as JSONC (comments and trailing commas allowed); .json wins over .jsonc.
  */
 export function loadConfig(opts: LoadOptions): LoadedConfig {
 	const env = opts.env ?? process.env;
@@ -131,8 +146,8 @@ export function loadConfig(opts: LoadOptions): LoadedConfig {
 
 	const candidates: string[] = [];
 	if (env.PI_IN_CONTEXT_CONFIG) candidates.push(expandHome(env.PI_IN_CONTEXT_CONFIG));
-	const agentPath = join(opts.agentDir, `${NAME}.json`);
-	const extPath = join(EXTENSION_DIR, "config.json");
+	const agentPath = firstExisting(join(opts.agentDir, NAME));
+	const extPath = firstExisting(join(EXTENSION_DIR, "config"));
 	candidates.push(agentPath, extPath);
 
 	const basePath = candidates.find((p) => existsSync(p));
@@ -152,7 +167,7 @@ export function loadConfig(opts: LoadOptions): LoadedConfig {
 		}
 	}
 
-	const projectPath = join(opts.cwd, opts.configDirName, `${NAME}.json`);
+	const projectPath = firstExisting(join(opts.cwd, opts.configDirName, NAME));
 	if (existsSync(projectPath)) {
 		if (opts.projectTrusted) {
 			const raw = readJson(projectPath, warnings);
@@ -179,9 +194,16 @@ export function loadConfig(opts: LoadOptions): LoadedConfig {
 	return { config, paths, warnings };
 }
 
+/** `<stem>.json` if it exists, else `<stem>.jsonc` if it exists, else `<stem>.json`. */
+function firstExisting(stem: string): string {
+	if (existsSync(`${stem}.json`)) return `${stem}.json`;
+	if (existsSync(`${stem}.jsonc`)) return `${stem}.jsonc`;
+	return `${stem}.json`;
+}
+
 function readJson(path: string, warnings: string[]): Record<string, unknown> | undefined {
 	try {
-		const value = JSON.parse(readFileSync(path, "utf8"));
+		const value = JSON.parse(stripJsonc(readFileSync(path, "utf8")));
 		if (!isObject(value)) {
 			warnings.push(`${path}: top level must be an object`);
 			return undefined;
@@ -248,8 +270,7 @@ function mergeConfig(
 				else warnings.push(`${where("tail.wrap")} must be a tag name or null`);
 			}
 			if (t.recentCount !== undefined) {
-				if (Number.isInteger(t.recentCount) && (t.recentCount as number) >= 0) out.tail.recentCount = t.recentCount as number;
-				else warnings.push(`${where("tail.recentCount")} must be a non-negative integer`);
+				warnings.push(`${where("tail.recentCount")} is no longer used; set "recent": { "count": n } on each source`);
 			}
 			out.tail.sources.push(...parseSources(t.sources, where("tail.sources"), dir, warnings));
 		}
@@ -295,6 +316,17 @@ function validateSource(item: unknown): string | undefined {
 	if (item.maxChars !== undefined && !(Number.isInteger(item.maxChars) && (item.maxChars as number) > 0)) {
 		return "maxChars must be a positive integer";
 	}
+	if (item.recent !== undefined) {
+		const r = item.recent;
+		if (!isObject(r)) return "recent must be an object";
+		if (r.count !== undefined && !(Number.isInteger(r.count) && (r.count as number) >= 0)) {
+			return "recent.count must be a non-negative integer";
+		}
+		if (r.roles !== undefined && !(Array.isArray(r.roles) && r.roles.every((x) => typeof x === "string"))) {
+			return "recent.roles must be an array of strings";
+		}
+		if (r.includeCurrent !== undefined && typeof r.includeCurrent !== "boolean") return "recent.includeCurrent must be a boolean";
+	}
 	if (kind === "url") {
 		if (item.method !== undefined && !["GET", "POST", "PUT"].includes(item.method as string)) return "method must be GET|POST|PUT";
 		if (item.headers !== undefined) {
@@ -315,6 +347,45 @@ function validateSource(item: unknown): string | undefined {
 function setBool(v: unknown, set: (v: boolean) => void, where: string, warnings: string[]) {
 	if (typeof v === "boolean") set(v);
 	else warnings.push(`${where} must be a boolean`);
+}
+
+/** Accept JSONC: drop line and block comments and trailing commas, leaving strings intact. */
+export function stripJsonc(src: string): string {
+	// Index just past whitespace and comments starting at i.
+	const skip = (i: number): number => {
+		for (;;) {
+			if (/\s/.test(src[i] ?? "")) i++;
+			else if (src[i] === "/" && src[i + 1] === "/") {
+				while (i < src.length && src[i] !== "\n") i++;
+			} else if (src[i] === "/" && src[i + 1] === "*") {
+				const end = src.indexOf("*/", i + 2);
+				i = end < 0 ? src.length : end + 2;
+			} else return i;
+		}
+	};
+	let out = "";
+	let i = 0;
+	while (i < src.length) {
+		const c = src[i];
+		if (c === '"') {
+			let j = i + 1;
+			while (j < src.length && src[j] !== '"') j += src[j] === "\\" ? 2 : 1;
+			out += src.slice(i, j + 1);
+			i = j + 1;
+		} else if (c === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) {
+			const next = skip(i);
+			out += " ";
+			i = next;
+		} else if (c === ",") {
+			const next = skip(i + 1);
+			if (src[next] !== "}" && src[next] !== "]") out += c;
+			i++;
+		} else {
+			out += c;
+			i++;
+		}
+	}
+	return out;
 }
 
 export function isObject(v: unknown): v is Record<string, unknown> {
