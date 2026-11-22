@@ -69,7 +69,7 @@ writeFileSync(join(agentDir, "in-context.json"), JSON.stringify({
   ] },
   tail: { sources: [
     { text: "STATIC-TAIL" },
-    { url: `${base}/prompt`, method: "POST", body: { user_message: "{{user_message}}", recent: "{{recent}}" } },
+    { url: `${base}/prompt`, method: "POST" }, // default body: { user_message, recent }
     { url: `${base}/down` },
   ] },
 }));

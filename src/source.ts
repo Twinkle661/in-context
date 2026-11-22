@@ -5,6 +5,8 @@ import { expandEnv, getPath, interpolate, renderBody, type Vars } from "./templa
 export type SourceResult = { ok: true; text: string; ms: number } | { ok: false; error: string; ms: number };
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
+/** Body sent by POST/PUT sources that do not set one. */
+export const DEFAULT_BODY = { user_message: "{{user_message}}", recent: "{{recent}}" };
 export const DEFAULT_MAX_CHARS = 12_000;
 const TRUNCATED = "\n[truncated by in-context]";
 
@@ -56,8 +58,8 @@ async function fetchSource(src: HttpSource, opts: ResolveOptions): Promise<strin
 
 	const method = src.method ?? "GET";
 	let body: string | undefined;
-	if (method !== "GET" && src.body !== undefined) {
-		body = JSON.stringify(renderBody(src.body, opts.vars));
+	if (method !== "GET") {
+		body = JSON.stringify(renderBody(src.body ?? DEFAULT_BODY, opts.vars));
 		headers["Content-Type"] ??= "application/json";
 	}
 
@@ -114,11 +116,6 @@ function describe(error: unknown): string {
 		return cause?.code ? `${error.message} (${cause.code})` : error.message;
 	}
 	return String(error);
-}
-
-/** Resolve many sources concurrently; results keep input order. */
-export function resolveAll(sources: Source[], opts: ResolveOptions): Promise<SourceResult[]> {
-	return Promise.all(sources.map((s) => resolveSource(s, opts)));
 }
 
 export function joinParts(parts: string[]): string {

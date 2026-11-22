@@ -3,8 +3,8 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../src/config.ts";
-import { inject } from "../src/tail.ts";
+import { loadConfig, stripJsonc } from "../src/config.ts";
+import { inject, recentMessages } from "../src/tail.ts";
 import { expandEnv, getPath, renderBody } from "../src/template.ts";
 
 test("renderBody keeps raw values for whole-string vars", () => {
@@ -70,4 +70,51 @@ test("inject merges into trailing user message, otherwise appends", () => {
 	assert.equal(user.content, "hi", "input not mutated");
 	const separate = inject([user], "BLOCK", "separate");
 	assert.equal(separate.length, 2);
+});
+
+test("stripJsonc removes comments and trailing commas but not string content", () => {
+	const src = `{
+	// line comment
+	"a": "keep // this, }", /* block */
+	"b": [1, 2, ], "c": "x/*y*/z",
+}`;
+	assert.deepEqual(JSON.parse(stripJsonc(src)), { a: "keep // this, }", b: [1, 2], c: "x/*y*/z" });
+});
+
+test("recentMessages: per-source count, roles and includeCurrent", () => {
+	const msgs = [
+		{ role: "user", content: "u1", timestamp: 1 },
+		{ role: "assistant", content: [{ type: "text", text: "a1" }, { type: "toolCall" }] },
+		{ role: "toolResult", content: [{ type: "text", text: "tool out" }] },
+		{ role: "custom", content: "recall" },
+		{ role: "assistant", content: [{ type: "thinking", thinking: "hmm" }] },
+		{ role: "user", content: "u2", timestamp: 2 },
+	] as never[];
+	const current = msgs[5];
+	assert.deepEqual(recentMessages(msgs, undefined, current), [
+		{ role: "user", text: "u1" }, { role: "assistant", text: "a1" }, { role: "user", text: "u2" },
+	]);
+	assert.deepEqual(recentMessages(msgs, { count: 2, includeCurrent: false }, current), [
+		{ role: "user", text: "u1" }, { role: "assistant", text: "a1" },
+	]);
+	assert.deepEqual(recentMessages(msgs, { count: 2, roles: ["toolResult", "custom"] }, current), [
+		{ role: "toolResult", text: "tool out" }, { role: "custom", text: "recall" },
+	]);
+	assert.deepEqual(recentMessages(msgs, { count: 0 }, current), []);
+});
+
+test("config: per-source recent validated, tail.recentCount warns, JSONC accepted", () => {
+	const agent = mkdtempSync(join(tmpdir(), "a-"));
+	const cwd = mkdtempSync(join(tmpdir(), "c-"));
+	writeFileSync(join(agent, "in-context.json"), `{
+		// comment
+		"tail": { "recentCount": 3, "sources": [
+			{ "text": "ok", "recent": { "count": 2 } },
+			{ "text": "bad", "recent": { "roles": "user" } },
+		] },
+	}`);
+	const r = loadConfig({ agentDir: agent, cwd, configDirName: ".pi", projectTrusted: false, env: {} });
+	assert.equal(r.config.tail.sources.length, 1);
+	assert.ok(r.warnings.some((w) => w.includes("recentCount is no longer used")));
+	assert.ok(r.warnings.some((w) => w.includes("recent.roles")));
 });

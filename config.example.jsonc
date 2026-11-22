@@ -1,0 +1,104 @@
+// in-context: full reference config. Every field is optional; values shown are the defaults
+// unless marked "example". Config files are parsed as JSONC, so you can copy this file to
+// config.jsonc (or config.json) as-is, comments included.
+{
+  // Where warnings go: "auto" = TUI notifications in interactive mode, stderr otherwise.
+  // Also "ui", "stderr", "off". Nothing is ever written to stdout (the RPC protocol stream).
+  "log": "auto",
+
+  // Record every tail fetch as an "in-context/tail-trace" session entry (never sent to the model).
+  "debug": false,
+
+  // ── system: injected once per session ────────────────────────────────────────────
+  "system": {
+    "enabled": true,
+
+    // "system":  a section at the end of pi's system prompt. Remote sources are fetched once
+    //            per session and reused on resume/fork/reload; /in-context refresh re-fetches.
+    // "message": a hidden user-role message stored before the first user message of a new
+    //            session, then left to ordinary history (compaction summarises it).
+    "mode": "system",
+
+    // Wrapper tag. In "system" mode it is also pi's section name: must match
+    // ^[a-z][a-z0-9_-]*$ and cannot be null. In "message" mode null means no wrapper.
+    "wrap": "in-context",
+
+    // Joined in order with blank lines; failed or empty sources are left out.
+    // Variables for text/url/body: {{session_id}} {{cwd}} {{model}} {{now}},
+    // frozen when the session starts so the injected text stays byte-identical.
+    "sources": [
+      // Static text (example).
+      { "text": "You are talking to the user through a chat bridge." },
+
+      // A file: absolute, ~/..., or relative to this config file (example).
+      // Re-read on every run in "system" mode; edit + /reload to apply.
+      { "file": "./persona.md" },
+
+      // A REST endpoint (example).
+      {
+        "url": "https://example.com/api/persona",
+        "method": "GET",                       // GET | POST | PUT
+        "headers": { "Authorization": "Bearer ${env:EXAMPLE_API_KEY}" },  // missing env var → source skipped
+        "parse": "json",                       // "json": read `field`; "text": whole body
+        "field": "content",                    // dot path, e.g. "data.items.0.text"
+        "timeoutMs": 10000,
+        "maxChars": 12000,                     // longer results are truncated and marked
+        "wrap": "persona",                     // optional per-source wrapper tag
+        "id": "persona",                       // optional; key for the session snapshot
+        "enabled": true
+      }
+    ]
+  },
+
+  // ── tail: appended after the latest message on every model request, never stored ──
+  "tail": {
+    "enabled": true,
+
+    // "user_message": fetch once per user message, reuse it across a tool loop.
+    // "request":      fetch before every model request.
+    "refresh": "user_message",
+
+    // "merge": append to the trailing user message (or add a separate one when the request
+    //          ends with something else, e.g. a tool result). "separate": always separate.
+    "placement": "merge",
+
+    // Outer wrapper for the whole tail block; null for none.
+    "wrap": "in-context",
+
+    // Variables: {{user_message}} {{recent}} {{session_id}} {{cwd}} {{model}} {{now}} {{turn_index}}
+    // In a JSON body, a string that is exactly "{{var}}" becomes the raw value (so {{recent}}
+    // stays an array); anywhere else the value is interpolated as text.
+    "sources": [
+      // Static text with a variable (example).
+      { "text": "Current time: {{now}}" },
+
+      // POST without a body sends the default:
+      //   { "user_message": "{{user_message}}", "recent": "{{recent}}" }
+      // (example)
+      {
+        "url": "https://example.com/api/prompt",
+        "method": "POST",
+        "headers": { "Authorization": "Bearer ${env:EXAMPLE_API_KEY}" },
+        "field": "content",
+
+        // What {{recent}} holds for this source: [{ "role": ..., "text": ... }], oldest first,
+        // text parts only (no images, thinking or tool-call arguments).
+        "recent": {
+          "count": 6,                          // messages without text don't count
+          "roles": ["user", "assistant"],      // also: toolResult, bashExecution, custom, ...
+          "includeCurrent": true               // false: leave out the message in {{user_message}}
+        }
+      },
+
+      // An endpoint with its own request shape (example).
+      {
+        "url": "https://example.com/api/recall",
+        "method": "POST",
+        "body": { "query": "{{user_message}}", "budget": "mid", "context": "{{recent}}" },
+        "recent": { "count": 2, "includeCurrent": false },
+        "field": "results",                    // non-string values are JSON-encoded
+        "wrap": "memories"
+      }
+    ]
+  }
+}
